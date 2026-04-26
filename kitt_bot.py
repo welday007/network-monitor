@@ -10,6 +10,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from wifi_tools import default_wifi_state, load_json_dict
+
 BASE = Path('/home/jarvis/monitor')
 ENV_FILE = BASE / 'kitt.env'
 LLM_ENV = BASE / 'llm.env'
@@ -19,6 +21,7 @@ ACTIVITY_LOG = BASE / 'activity.log'
 HEARTBEAT = BASE / 'personas/kitt/heartbeat.json'
 KITT_SOUL = BASE / 'personas/kitt/soul.md'
 KITT_SKILLS = BASE / 'personas/kitt/skills.md'
+WIFI_STATE = BASE / 'wifi_backup_state.json'
 SHARED_MEMORY = BASE / 'shared_memory.json'
 LOCK_FILE = BASE / 'kitt_bot.pid'
 CHAT_LOG = BASE / 'kitt_chat.jsonl'
@@ -232,6 +235,63 @@ def lastalert_text() -> str:
     return 'KITT last alert log.\n\n' + '\n'.join(lines[-5:])
 
 def explain_text() -> str:
+    if WIFI_STATE.exists():
+        try:
+            wifi_state = load_json_dict(WIFI_STATE, default_wifi_state())
+            if isinstance(wifi_state, dict) and wifi_state.get('last_checked_at'):
+                detail = wifi_state.get('last_detail', '')
+                last_checked = wifi_state.get('last_checked_at', 'unknown time')
+                visible = wifi_state.get('last_visible_ssids', [])
+                ssid = wifi_state.get('last_associated_ssid', '')
+                last_good = wifi_state.get('last_good_at', '')
+                last_failure = wifi_state.get('last_failure_at', '')
+                scan_ready = bool(wifi_state.get('last_scan_ready', False))
+                online_ready = bool(wifi_state.get('last_backup_ready', False))
+                ip_ready = bool(wifi_state.get('last_ip_ready', False))
+                ping_ok = bool(wifi_state.get('last_ping_ok', False))
+                visible_text = ', '.join(visible) if visible else 'none'
+                if wifi_state.get('last_status') == 'OK' or online_ready:
+                    return (
+                        'KITT analysis.\n\n'
+                        f'Backup Wi-Fi was last checked at {last_checked}. '
+                        f'Scan ready: {scan_ready}. Online ready: {online_ready}. '
+                        f'Visible SSIDs: {visible_text}. Associated SSID: {ssid or "none"}. '
+                        f'Last good: {last_good or "unknown"}. Last failure: {last_failure or "unknown"}.'
+                    )
+                if detail == 'visible_not_associated':
+                    return (
+                        'KITT analysis.\n\n'
+                        f'Backup SSIDs were visible at {last_checked}, but wlan1 was not associated. '
+                        f'The radio can see the network, so this is a connection problem rather than a missing SSID. '
+                        f'Last failure: {last_failure or "unknown"}.'
+                    )
+                if detail == 'visible_associated_no_ip':
+                    return (
+                        'KITT analysis.\n\n'
+                        f'wlan1 saw the backup SSID at {last_checked} and associated, but no IP address was acquired. '
+                        f'That points to DHCP or lease trouble. Last failure: {last_failure or "unknown"}.'
+                    )
+                if detail == 'visible_associated_no_ping':
+                    return (
+                        'KITT analysis.\n\n'
+                        f'wlan1 associated and received an address at {last_checked}, but ping still failed. '
+                        f'The uplink is likely impaired beyond the local radio link. Last failure: {last_failure or "unknown"}.'
+                    )
+                if detail == 'link_down':
+                    return (
+                        'KITT analysis.\n\n'
+                        f'wlan1 itself was down at {last_checked}. '
+                        f'That is an interface or driver problem, not a missing SSID. Last failure: {last_failure or "unknown"}.'
+                    )
+                return (
+                    'KITT analysis.\n\n'
+                    f'Backup Wi-Fi was last checked at {last_checked}. '
+                    f'Scan ready: {scan_ready}. Online ready: {online_ready}. IP ready: {ip_ready}. Ping OK: {ping_ok}. '
+                    f'Last good: {last_good or "unknown"}. Last failure: {last_failure or "unknown"}. '
+                    'That points to coverage, radio, or SSID broadcast trouble.'
+                )
+        except Exception:
+            pass
     if not LOG.exists(): return 'KITT: There is no recent alert to explain.'
     lines = [line for line in LOG.read_text(encoding='utf-8', errors='ignore').splitlines() if any(tag in line for tag in ('STATE_CHANGE', 'LATENCY_ANOMALY', 'LATENCY_NORMALIZED', 'INTERNET_OUTAGE', 'ROUTER_DOWN'))]
     if not lines: return 'KITT: There is no recent alert to explain.'

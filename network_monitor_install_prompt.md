@@ -307,6 +307,7 @@ Repo files to keep on disk for repeatable installs:
 - /home/jarvis/monitor/rc.local
 - /home/jarvis/monitor/wlan1.interfaces
 - /home/jarvis/monitor/wpa_supplicant-wlan1.template.conf
+- /home/jarvis/monitor/wifi_tools.py
 
 Permissions and quality:
 

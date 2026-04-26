@@ -12,6 +12,7 @@ Core pieces:
 - dashboard: `dashboard.py`
 - safe root wrapper: `monitor_admin.py`
 - backup Wi-Fi check: `check_wifi_backup.py`
+- shared Wi-Fi helpers: `wifi_tools.py`
 
 Dashboard:
 
@@ -63,6 +64,7 @@ Backup Wi-Fi:
 - primary route stays on `eth0`
 - USB adapter backup is `wlan1`
 - SSID order: `WKRP`, then `My_MiFi_WiFi`
+- scan visibility is only the first gate; the backup path is ready when `wlan1` is associated, has an IP, and can ping out
 - hourly backup check: `check_wifi_backup.py`
 - route metric on `wlan1`: `3000`
 

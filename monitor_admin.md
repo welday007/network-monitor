@@ -40,6 +40,9 @@ Notes:
 - dashboard and bots are restarted as user `jarvis`, not as root
 - `/etc` file installs are restricted to an allowlist
 - all actions are logged to `/var/log/monitor-admin.log`
+- `wifi-status wlan1` now includes parsed fields under `parsed`
+- `restart-wifi wlan1` runs a follow-up `wifi-check` and returns that verdict
+- `scan-wifi wlan1` reports `scan_ready` when `WKRP` or `My_MiFi_WiFi` is visible
 - `wpa_wlan1` expects a private local file `wpa_supplicant-wlan1.conf`
 - the tracked starter file is `wpa_supplicant-wlan1.template.conf`
 - intended sudoers rule:

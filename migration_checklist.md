@@ -11,6 +11,7 @@ Goal: move the Jarvis/KITT monitor stack from the current 32-bit Dell to a fresh
    - `/home/jarvis/monitor/llm.env`
    - `/home/jarvis/monitor/search.env`
    - local `wpa_supplicant-wlan1.conf`
+   - the shared Wi-Fi helper `wifi_tools.py` is tracked in the repo
 3. Save current live Dell reference data somewhere private:
    - `crontab -l`
    - `/etc/rc.local`

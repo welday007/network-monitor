@@ -115,6 +115,18 @@ def load_chat_log(path: Path, limit: int = 12) -> list[dict]:
     return items
 
 
+def load_json_dict(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+
 def read_local_payload() -> dict:
     persona_files = {
         "jarvis_soul": LOCAL_BASE / "personas/jarvis/soul.md",
@@ -139,7 +151,8 @@ def read_local_payload() -> dict:
         "personas": load_personas(persona_files),
         "heartbeats": load_heartbeats(heartbeat_files),
         "chats": {name: load_chat_log(path) for name, path in chat_logs.items()},
-        "latency_history": json.loads((LOCAL_BASE / "latency_history.json").read_text(encoding="utf-8")) if (LOCAL_BASE / "latency_history.json").exists() else {},
+        "latency_history": load_json_dict(LOCAL_BASE / "latency_history.json"),
+        "wifi_state": load_json_dict(LOCAL_BASE / "wifi_backup_state.json"),
     }
     vnstat = json.loads(subprocess.run(["vnstat", "--json"], capture_output=True, text=True, timeout=30).stdout)
     return {"metrics": metrics, "vnstat": vnstat}
@@ -171,8 +184,21 @@ hosts = ["192.168.1.1", "1.1.1.1", "8.8.8.8"]
 state_dir = Path("/home/jarvis/monitor/state")
 log_path = Path("/home/jarvis/monitor/net-health.log")
 latency_history = Path("/home/jarvis/monitor/latency_history.json")
+wifi_state = Path("/home/jarvis/monitor/wifi_backup_state.json")
 
-payload = {"hosts": [], "recent_events": [], "personas": {}, "heartbeats": {}, "chats": {}, "latency_history": {}}
+
+def read_json_dict(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+payload = {"hosts": [], "recent_events": [], "personas": {}, "heartbeats": {}, "chats": {}, "latency_history": {}, "wifi_state": {}}
 for host in hosts:
     state_file = state_dir / host
     status = state_file.read_text().strip() if state_file.exists() else "UNKNOWN"
@@ -209,10 +235,9 @@ for key, path in chat_logs.items():
     payload["chats"][key] = items
 
 if latency_history.exists():
-    try:
-        payload["latency_history"] = json.loads(latency_history.read_text(encoding="utf-8"))
-    except Exception:
-        payload["latency_history"] = {}
+    payload["latency_history"] = read_json_dict(latency_history)
+
+payload["wifi_state"] = read_json_dict(wifi_state)
 
 print(json.dumps(payload))
 PY"""
@@ -333,6 +358,46 @@ def render_heartbeat(name: str, heartbeat: dict) -> str:
         f'<div class="statusline"><strong>{html.escape(status)}</strong></div>'
         f'<div class="meta">Updated: {html.escape(updated)}</div>'
         f'<div class="meta">Source: {html.escape(source)}</div>'
+        "</article>"
+    )
+
+
+def wifi_panel_class(wifi_state: dict) -> str:
+    if not wifi_state:
+        return "critical"
+    if wifi_state.get("last_backup_ready"):
+        return "healthy"
+    detail = str(wifi_state.get("last_detail", ""))
+    if detail in {"visible_not_associated", "visible_associated_no_ip", "visible_associated_no_ping"}:
+        return "warning"
+    return "critical"
+
+
+def render_wifi_panel(wifi_state: dict) -> str:
+    checked = str(wifi_state.get("last_checked_at", "never") or "never")
+    detail = str(wifi_state.get("last_detail", "unknown") or "unknown")
+    visible = wifi_state.get("last_visible_ssids", [])
+    if not isinstance(visible, list):
+        visible = []
+    visible_text = ", ".join(str(item) for item in visible) if visible else "none"
+    associated = str(wifi_state.get("last_associated_ssid", "") or "none")
+    route = str(wifi_state.get("last_route", "") or "none")
+    last_good = str(wifi_state.get("last_good_at", "") or "never")
+    last_failure = str(wifi_state.get("last_failure_at", "") or "never")
+    status = "READY" if wifi_state.get("last_backup_ready") else ("PARTIAL" if wifi_state.get("last_scan_ready") else "DOWN")
+    return (
+        f'<article class="panel {wifi_panel_class(wifi_state)}">'
+        '<div class="label">Wi-Fi backup</div>'
+        f'<div class="statusline"><strong>{html.escape(status)}</strong></div>'
+        f'<div class="meta">Checked: {html.escape(checked)}</div>'
+        f'<div class="meta">Detail: {html.escape(detail)}</div>'
+        f'<div class="meta">Visible SSIDs: {html.escape(visible_text)}</div>'
+        f'<div class="meta">Associated SSID: {html.escape(associated)}</div>'
+        f'<div class="meta">Scan ready: {"yes" if wifi_state.get("last_scan_ready") else "no"} · Online ready: {"yes" if wifi_state.get("last_backup_ready") else "no"}</div>'
+        f'<div class="meta">IP ready: {"yes" if wifi_state.get("last_ip_ready") else "no"} · Ping OK: {"yes" if wifi_state.get("last_ping_ok") else "no"}</div>'
+        f'<div class="meta">Last good: {html.escape(last_good)} · Last failure: {html.escape(last_failure)}</div>'
+        f'<div class="meta">Route: <code>{html.escape(route)}</code></div>'
+        f'<div class="meta">Last alert: {html.escape(str(wifi_state.get("last_alert_sent_at", "never") or "never"))}</div>'
         "</article>"
     )
 
@@ -637,10 +702,12 @@ def render_page(payload: dict, flash: str = "", range_key: str = "day", page: st
     heartbeats = metrics["heartbeats"]
     chats = metrics.get("chats", {})
     latency_history = metrics.get("latency_history", {})
+    wifi_state = metrics.get("wifi_state", {})
     cards = "".join(render_status_card(item) for item in metrics["hosts"])
     recent_events = render_recent_events(metrics["recent_events"])
     charts = "".join(render_latency_chart(host, latency_history.get(host, []), range_key) for host in ("192.168.1.1", "1.1.1.1", "8.8.8.8"))
     chat_panels = render_chat_panel("jarvis", chats.get("jarvis", [])) + render_chat_panel("kitt", chats.get("kitt", []))
+    wifi_panel = render_wifi_panel(wifi_state)
     transport = "directly on this machine" if DASHBOARD_MODE == "local" else "to the Dell over SSH"
     storage_label = "Local Files" if DASHBOARD_MODE == "local" else "Remote Files"
     main_tabs = render_main_tabs(page, range_key, active_doc)
@@ -667,6 +734,7 @@ def render_page(payload: dict, flash: str = "", range_key: str = "day", page: st
         <div class="statusline"><strong>{html.escape(wifi_traffic["rx"])} down</strong></div>
         <div class="meta">{html.escape(wifi_traffic["tx"])} up</div>
       </section>
+      {wifi_panel}
       <section class="panel">
         <div class="label">Current Targets</div>
         <div class="cards" style="margin-top:18px">{cards}</div>
@@ -756,8 +824,13 @@ def render_page(payload: dict, flash: str = "", range_key: str = "day", page: st
       padding: 18px;
       box-shadow: 0 18px 40px rgba(0,0,0,0.28);
     }}
+    .panel.healthy {{ border-left: 8px solid var(--accent); }}
+    .panel.warning {{ border-left: 8px solid #ffd166; }}
+    .panel.critical {{ border-left: 8px solid var(--bad); }}
     .card.critical {{ border-left: 8px solid var(--bad); }}
     .card.healthy {{ border-left: 8px solid var(--accent); }}
+    .panel.warning .statusline strong {{ color: #ffd166; }}
+    .panel.critical .statusline strong {{ color: var(--bad); }}
     .label {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.82rem; }}
     .status {{ font-size: 1.9rem; margin-top: 10px; }}
     .statusline strong {{ color: var(--accent); font-size: 1.15rem; }}

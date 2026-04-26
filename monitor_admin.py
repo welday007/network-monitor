@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import pwd
-import re
 import shutil
 import signal
 import socket
@@ -14,6 +13,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from wifi_tools import (
+    parse_iwconfig,
+    parse_ip_brief,
+    parse_kv_lines,
+    scan_visible_ssids,
+)
 
 MONITOR_BASE = Path("/home/jarvis/monitor")
 JARVIS_USER = "jarvis"
@@ -266,22 +272,37 @@ def restart_wifi(iface: str) -> dict[str, Any]:
     kill_matching(f"wpa_supplicant -i {iface}")
     run_cmd(["/usr/sbin/wpa_supplicant", "-B", "-i", iface, "-c", str(config)], check=False, timeout=15)
     run_cmd(["/usr/sbin/dhcpcd", iface], check=False, timeout=20)
-    time.sleep(3)
-    return wifi_status(iface)
+    time.sleep(5)
+    status = wifi_status(iface)
+    time.sleep(2)
+    post_check = run_job("wifi-check")
+    return {
+        "interface": iface,
+        "config": str(config),
+        "wifi_status": status,
+        "wifi_check": post_check,
+    }
 
 
 def scan_wifi(iface: str) -> dict[str, Any]:
     if iface not in WIFI_IFACES:
         raise ValueError(f"unknown wifi interface: {iface}")
-    proc = run_cmd(["/sbin/iwlist", iface, "scan"], check=False, timeout=45)
-    essids = []
-    for line in proc.stdout.splitlines():
-        match = re.search(r'ESSID:"(.*)"', line)
-        if match:
-            essid = match.group(1)
-            if essid not in essids:
-                essids.append(essid)
-    return {"interface": iface, "essids": essids[:40], "matched_backup_ssids": [item for item in essids if item in {"WKRP", "My_MiFi_WiFi"}]}
+    iwlist_cmd = "/sbin/iwlist"
+    essids, raw_scan = scan_visible_ssids(
+        iwlist_cmd,
+        iface,
+        ["WKRP", "My_MiFi_WiFi"],
+        lambda args: run_cmd(args, check=False, timeout=45),
+    )
+    matched_backup_ssids = [item for item in essids if item in {"WKRP", "My_MiFi_WiFi"}]
+    return {
+        "interface": iface,
+        "essids": essids[:40],
+        "scan_raw": raw_scan,
+        "matched_backup_ssids": matched_backup_ssids,
+        "scan_ready": bool(matched_backup_ssids),
+        "backup_ready": bool(matched_backup_ssids),
+    }
 
 
 def wifi_status(iface: str) -> dict[str, Any]:
@@ -290,7 +311,29 @@ def wifi_status(iface: str) -> dict[str, Any]:
     link = run_cmd(["/usr/sbin/ip", "-brief", "addr", "show", iface], check=False).stdout.splitlines()
     iwconfig = run_cmd(["/usr/sbin/iwconfig", iface], check=False).stdout.splitlines()
     wpa = run_cmd(["/usr/sbin/wpa_cli", "-i", iface, "status"], check=False).stdout.splitlines()
-    return {"interface": iface, "ip_brief": link, "iwconfig": iwconfig, "wpa_status": wpa}
+    ip_parsed = parse_ip_brief(link)
+    iwconfig_parsed = parse_iwconfig(iwconfig)
+    wpa_parsed = parse_kv_lines(wpa)
+    parsed = {
+        "ip_state": ip_parsed["state"],
+        "ip_addresses": ip_parsed["addresses"],
+        "primary_address": ip_parsed["primary_address"],
+        "ssid": iwconfig_parsed.get("ssid", "") or wpa_parsed.get("ssid", ""),
+        "associated": bool(iwconfig_parsed.get("associated")) or wpa_parsed.get("wpa_state") == "COMPLETED",
+        "wpa_state": wpa_parsed.get("wpa_state", ""),
+        "ip_address": wpa_parsed.get("ip_address", "") or wpa_parsed.get("address", ""),
+        "access_point": iwconfig_parsed.get("access_point", ""),
+        "link_quality": iwconfig_parsed.get("link_quality", ""),
+        "signal_level": iwconfig_parsed.get("signal_level", ""),
+        "online_ready": ip_parsed["state"] == "UP" and bool(ip_parsed["addresses"]) and wpa_parsed.get("wpa_state") == "COMPLETED",
+    }
+    return {
+        "interface": iface,
+        "ip_brief": link,
+        "iwconfig": iwconfig,
+        "wpa_status": wpa,
+        "parsed": parsed,
+    }
 
 
 def usage() -> dict[str, Any]:
