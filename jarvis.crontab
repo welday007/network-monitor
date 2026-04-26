@@ -1,0 +1,7 @@
+@reboot /home/jarvis/monitor/start_bots.sh >> /home/jarvis/monitor/cron.log 2>&1
+@reboot sh -c 'JARVIS_DASHBOARD_MODE=local JARVIS_DASHBOARD_HOST=0.0.0.0 python3 /home/jarvis/monitor/dashboard.py >> /home/jarvis/monitor/dashboard.out 2>&1'
+* * * * * /usr/bin/python3 /home/jarvis/monitor/monitor_net.py >> /home/jarvis/monitor/cron.log 2>&1
+*/5 * * * * /usr/bin/python3 /home/jarvis/monitor/health_watchdog.py >> /home/jarvis/monitor/cron.log 2>&1
+0 8 * * * /usr/bin/python3 /home/jarvis/monitor/send_joke.py >> /home/jarvis/monitor/cron.log 2>&1
+0 18 * * * /usr/bin/python3 /home/jarvis/monitor/send_status.py >> /home/jarvis/monitor/cron.log 2>&1
+0 * * * * /usr/bin/python3 /home/jarvis/monitor/check_wifi_backup.py >> /home/jarvis/monitor/cron.log 2>&1

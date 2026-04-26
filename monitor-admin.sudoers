@@ -1,0 +1,1 @@
+jarvis ALL=(root) NOPASSWD: /usr/local/bin/monitor-admin

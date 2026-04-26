@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pid
+*.log
+*.out
+*.env
+*.jsonl
+wpa_supplicant-wlan1.conf
+
+# Local/runtime state
+state/
+latest_alert.json
+latest_router_event.json
+shared_memory.json
+coordination_state.json
+alert_state.json
+wifi_backup_state.json
+latency_history.json
+jarvis_bot_state.json
+kitt_bot_state.json
+router_syslog.log
+router_events.log
+activity.log
+net-health.log
+cron.log
+dashboard.out
+start_bots.log
+router_syslog_forwarder.log
+
+# Local notes and OS/editor noise
+.DS_Store
+Thumbs.db

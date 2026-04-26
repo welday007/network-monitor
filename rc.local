@@ -1,0 +1,7 @@
+#!/bin/sh
+
+/home/jarvis/monitor/start_bots.sh >> /home/jarvis/monitor/cron.log 2>&1 &
+nohup socat UDP4-RECVFROM:514,fork UDP4-SENDTO:127.0.0.1:5514 >/home/jarvis/monitor/router_syslog_forwarder.log 2>&1 </dev/null &
+nohup sh -c 'JARVIS_DASHBOARD_MODE=local JARVIS_DASHBOARD_HOST=0.0.0.0 python3 /home/jarvis/monitor/dashboard.py >> /home/jarvis/monitor/dashboard.out 2>&1' >/dev/null 2>&1 &
+
+exit 0
