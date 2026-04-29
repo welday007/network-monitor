@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 import json
 import re
 import subprocess
 from typing import Callable
-
-WIFI_ALERT_DEDUP_SECONDS = 90 * 60
 
 
 def default_wifi_state() -> dict:
@@ -115,20 +112,8 @@ def alert_key(details: dict) -> str:
     ])
 
 
-def parse_alert_time(value: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(value)
-    except Exception:
-        return None
-
-
 def should_send_alert(state: dict, key: str) -> bool:
-    if state.get('last_alert_key') != key:
-        return True
-    sent_at = parse_alert_time(str(state.get('last_alert_sent_at', '')))
-    if not sent_at:
-        return True
-    return (datetime.now() - sent_at).total_seconds() >= WIFI_ALERT_DEDUP_SECONDS
+    return state.get('last_alert_key') != key
 
 
 def parse_ip_brief(lines: list[str]) -> dict[str, object]:

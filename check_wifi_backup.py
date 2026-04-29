@@ -192,6 +192,7 @@ def main() -> int:
     state['last_scan_raw'] = details.get('scan_text', '')
     if status == 'OK':
         state['last_good_at'] = state['last_checked_at']
+        state['last_alert_key'] = ''
     else:
         state['last_failure_at'] = state['last_checked_at']
     details['last_good_at'] = state.get('last_good_at', '')
