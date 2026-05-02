@@ -54,7 +54,13 @@ def load_env(path: Path) -> dict:
 
 
 def load_state() -> dict:
-    return load_json_dict(STATE_FILE, default_wifi_state())
+    state = load_json_dict(STATE_FILE, default_wifi_state())
+    last_detail = str(state.get('last_detail', ''))
+    if state.get('last_status') == 'OK':
+        state['last_alert_key'] = ''
+    elif last_detail and state.get('last_alert_key') not in ('', last_detail):
+        state['last_alert_key'] = last_detail
+    return state
 
 
 def save_state(state: dict) -> None:
