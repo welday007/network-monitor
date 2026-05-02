@@ -103,13 +103,7 @@ def readiness_detail(link_state: str, scan_ready: bool, associated: bool, ip_rea
 
 
 def alert_key(details: dict) -> str:
-    visible = ','.join(details.get('visible_ssids', []))
-    return '|'.join([
-        str(details.get('status_detail', '')),
-        visible,
-        str(details.get('ssid', '')),
-        str(details.get('state', '')),
-    ])
+    return str(details.get('status_detail', ''))
 
 
 def should_send_alert(state: dict, key: str) -> bool:
