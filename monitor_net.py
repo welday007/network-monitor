@@ -17,7 +17,7 @@ LATEST_ALERT = BASE / 'latest_alert.json'
 ENV_FILE = BASE / 'kitt.env'
 JARVIS_ENV = BASE / 'telegram.env'
 LLM_ENV = BASE / 'llm.env'
-HEARTBEAT = BASE / 'personas/kitt/heartbeat.json'
+MONITOR_HEARTBEAT = BASE / 'personas/monitor_net/heartbeat.json'
 COORDINATION_STATE = BASE / 'coordination_state.json'
 SHARED_MEMORY = BASE / 'shared_memory.json'
 LATENCY_HISTORY = BASE / 'latency_history.json'
@@ -30,10 +30,11 @@ KITT_SEVERE_EVENTS = {'ROUTER_DOWN', 'INTERNET_OUTAGE'}
 DEFAULT_MODEL = 'openrouter/free'
 JARVIS_FOLLOWUP_COOLDOWN_SECONDS = 30 * 60
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+MONITOR_HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
 
 def update_heartbeat(source: str) -> None:
-    HEARTBEAT.write_text(json.dumps({'bot': 'kitt', 'source': source, 'updated_at': datetime.now().isoformat(timespec='seconds')}, indent=2), encoding='utf-8')
+    MONITOR_HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+    MONITOR_HEARTBEAT.write_text(json.dumps({'bot': 'monitor_net', 'source': source, 'status': 'ok', 'updated_at': datetime.now().isoformat(timespec='seconds')}, indent=2), encoding='utf-8')
 
 def write_latest_alert(payload: dict) -> None:
     LATEST_ALERT.write_text(json.dumps(payload, indent=2), encoding='utf-8')
