@@ -48,6 +48,17 @@ ERROR_BACKOFF_SECONDS = [5, 10, 20, 30, 60]
 
 LOCK_ACQUIRED = False
 
+
+def default_state() -> dict:
+    return {
+        'last_update_id': 0,
+        'poll_error_active': False,
+        'last_poll_error_reason': '',
+        'last_poll_error_detail': '',
+        'last_poll_error_at': '',
+        'last_poll_recovered_at': '',
+    }
+
 def update_heartbeat(source: str, status: str = 'ok') -> None:
     HEARTBEAT.write_text(json.dumps({'bot': 'jarvis', 'source': source, 'status': status, 'updated_at': datetime.now().isoformat(timespec='seconds')}, indent=2), encoding='utf-8')
 
@@ -120,10 +131,15 @@ def command_allowed_in_chat(cmd: str, target: str, chat_type: str, incoming_chat
     return False
 
 def load_state() -> dict:
+    state = default_state()
     if STATE_FILE.exists():
-        try: return json.loads(STATE_FILE.read_text(encoding='utf-8'))
-        except Exception: pass
-    return {'last_update_id': 0}
+        try:
+            payload = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+            if isinstance(payload, dict):
+                state.update(payload)
+        except Exception:
+            pass
+    return state
 
 def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding='utf-8')
@@ -417,13 +433,29 @@ def main() -> None:
     while True:
         try:
             had_activity = run_once(token, private_chat_id, group_chat_id, bot_username, state)
+            if state.get('poll_error_active'):
+                recovered_reason = state.get('last_poll_error_reason', '')
+                activity('POLL_RECOVERED', reason=recovered_reason)
+                log(f'JARVIS_BOT_POLL_RECOVERED reason={recovered_reason or "unknown"}')
+                state['poll_error_active'] = False
+                state['last_poll_error_reason'] = ''
+                state['last_poll_error_detail'] = ''
+                state['last_poll_error_at'] = ''
+                state['last_poll_recovered_at'] = datetime.now().isoformat(timespec='seconds')
+                save_state(state)
             error_count = 0
             update_heartbeat('jarvis_bot.py', 'ok')
             activity('LOOP_TICK', had_activity=had_activity, last_update_id=state.get('last_update_id', 0))
         except Exception as exc:
             update_heartbeat('jarvis_bot.py', 'degraded')
-            log(f'JARVIS_BOT_POLL_ERROR reason={type(exc).__name__}')
-            activity('POLL_ERROR', reason=type(exc).__name__, detail=str(exc))
+            reason = type(exc).__name__
+            if not state.get('poll_error_active') or state.get('last_poll_error_reason') != reason:
+                log(f'JARVIS_BOT_POLL_ERROR reason={reason}')
+                activity('POLL_ERROR', reason=reason, detail=str(exc))
+                state['poll_error_active'] = True
+                state['last_poll_error_reason'] = reason
+                state['last_poll_error_detail'] = str(exc)
+                state['last_poll_error_at'] = datetime.now().isoformat(timespec='seconds')
             save_state(state)
             delay = ERROR_BACKOFF_SECONDS[min(error_count, len(ERROR_BACKOFF_SECONDS) - 1)]
             error_count += 1

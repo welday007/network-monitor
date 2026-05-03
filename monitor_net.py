@@ -28,6 +28,7 @@ SIGMA_THRESHOLD = 2.0
 CONSECUTIVE_ANOMALIES = 2
 KITT_SEVERE_EVENTS = {'ROUTER_DOWN', 'INTERNET_OUTAGE'}
 DEFAULT_MODEL = 'openrouter/free'
+JARVIS_FOLLOWUP_COOLDOWN_SECONDS = 30 * 60
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
 
@@ -72,9 +73,14 @@ def configured_destinations(*chat_ids: str | None) -> list[str]:
 
 def load_coordination_state() -> dict:
     if COORDINATION_STATE.exists():
-        try: return json.loads(COORDINATION_STATE.read_text(encoding='utf-8'))
-        except Exception: pass
-    return {'last_followup_key': ''}
+        try:
+            payload = json.loads(COORDINATION_STATE.read_text(encoding='utf-8'))
+            if isinstance(payload, dict):
+                payload.setdefault('followups', {})
+                return payload
+        except Exception:
+            pass
+    return {'followups': {}}
 
 def save_coordination_state(state: dict) -> None:
     COORDINATION_STATE.write_text(json.dumps(state, indent=2), encoding='utf-8')
@@ -113,8 +119,15 @@ def remember_event(source: str, payload: dict) -> None:
     memory['summary'] = payload.get('summary', memory.get('summary', ''))
     save_shared_memory(memory)
 
+def parse_time(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
 def alert_key(payload: dict) -> str:
-    return '|'.join([str(payload.get('time', '')), str(payload.get('event', '')), str(payload.get('host', '')), str(payload.get('status', ''))])
+    return '|'.join([str(payload.get('event', '')), str(payload.get('host', '')), str(payload.get('status', ''))])
 
 def load_alert_state() -> dict:
     if ALERT_STATE.exists():
@@ -258,7 +271,16 @@ def maybe_send_jarvis_group_followup(jarvis_token: str | None, jarvis_group_chat
     if coordination_level < 2 or not jarvis_token or not jarvis_group_chat_id:
         return
     key = alert_key(payload)
-    if coordination_state.get('last_followup_key') == key:
+    followups = coordination_state.setdefault('followups', {})
+    if not isinstance(followups, dict):
+        followups = {}
+        coordination_state['followups'] = followups
+    last_sent = followups.get(key, {})
+    if isinstance(last_sent, dict):
+        sent_at = parse_time(str(last_sent.get('sent_at', '')))
+    else:
+        sent_at = parse_time(str(last_sent))
+    if sent_at and (datetime.now() - sent_at).total_seconds() < JARVIS_FOLLOWUP_COOLDOWN_SECONDS:
         return
     try:
         message = request_jarvis_followup(api_key, model, payload) if api_key else fallback_jarvis_followup(payload)
@@ -266,7 +288,7 @@ def maybe_send_jarvis_group_followup(jarvis_token: str | None, jarvis_group_chat
         message = fallback_jarvis_followup(payload)
         log(f'JARVIS_LLM_FALLBACK reason={type(exc).__name__}')
     send_telegram(jarvis_token, jarvis_group_chat_id, message)
-    coordination_state['last_followup_key'] = key
+    followups[key] = {'sent_at': datetime.now().isoformat(timespec='seconds')}
     log(f'JARVIS_GROUP_FOLLOWUP_SENT event={payload.get("event")} host={payload.get("host")}')
 
 alert_env = load_env(ENV_FILE)
