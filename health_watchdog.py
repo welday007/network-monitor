@@ -50,10 +50,11 @@ def load_state() -> dict:
             payload = json.loads(STATE_FILE.read_text(encoding='utf-8'))
             if isinstance(payload, dict):
                 payload.setdefault('alerts', {})
+                payload.setdefault('heartbeat_fail_counts', {})
                 return payload
         except Exception:
             pass
-    return {'alerts': {}}
+    return {'alerts': {}, 'heartbeat_fail_counts': {}}
 
 
 def save_state(state: dict) -> None:
@@ -128,12 +129,17 @@ def main() -> None:
         status = str(payload.get('status', 'unknown'))
         stale = not updated or (now - updated).total_seconds() > HEARTBEAT_STALE_MINUTES * 60
         key = f'{name}_heartbeat'
+        fail_counts = state.setdefault('heartbeat_fail_counts', {})
+        count = int(fail_counts.get(key, 0))
         if status != 'ok' or stale:
+            fail_counts[key] = count + 1
             reason = f'status={status}'
             if stale:
                 reason += ', stale heartbeat'
-            alert_once(state, key, token, chat_id, f'Jarvis watchdog: {name} bot health degraded ({reason}).')
+            if fail_counts[key] >= 2:
+                alert_once(state, key, token, chat_id, f'Jarvis watchdog: {name} bot health degraded ({reason}).')
         else:
+            fail_counts[key] = 0
             clear_alert(state, key)
 
     if now.hour > 8 or (now.hour == 8 and now.minute >= 10):
