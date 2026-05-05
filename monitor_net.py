@@ -23,6 +23,9 @@ SHARED_MEMORY = BASE / 'shared_memory.json'
 LATENCY_HISTORY = BASE / 'latency_history.json'
 TARGETS = ['192.168.1.1', '1.1.1.1', '8.8.8.8']
 LATENCY_SAMPLE_LIMIT = 240
+LATENCY_BASELINE_INTERVAL_MINUTES = 360
+LATENCY_BASELINE_LIMIT = 120
+LATENCY_BREACH_LIMIT = 240
 MIN_SAMPLES_FOR_STATS = 12
 SIGMA_THRESHOLD = 2.0
 CONSECUTIVE_ANOMALIES = 2
@@ -156,7 +159,10 @@ def load_latency_history() -> dict:
         try:
             payload = json.loads(LATENCY_HISTORY.read_text(encoding='utf-8'))
             if isinstance(payload, dict):
-                return payload
+                normalized = {}
+                for host, samples in payload.items():
+                    normalized[host] = normalize_latency_samples(samples if isinstance(samples, list) else [])
+                return normalized
         except Exception:
             pass
     return {host: [] for host in TARGETS}
@@ -164,14 +170,56 @@ def load_latency_history() -> dict:
 def save_latency_history(history: dict) -> None:
     LATENCY_HISTORY.write_text(json.dumps(history, indent=2), encoding='utf-8')
 
+def normalize_latency_samples(samples: list) -> list[dict]:
+    normalized = []
+    for item in samples:
+        if not isinstance(item, dict):
+            continue
+        time = str(item.get('time', '')).strip()
+        status = str(item.get('status', 'UNKNOWN')).upper()
+        sample_type = str(item.get('type', 'recent')).lower()
+        rtt = item.get('rtt')
+        if not time:
+            continue
+        if rtt is not None and not isinstance(rtt, (int, float)):
+            try:
+                rtt = float(rtt)
+            except Exception:
+                rtt = None
+        normalized.append({'time': time, 'status': status, 'rtt': rtt, 'type': sample_type})
+    return normalized
+
+def classify_latency_sample(status: str, rtt: float | None, mean: float | None, stdev: float | None) -> str:
+    if status != 'UP':
+        return 'breach'
+    if rtt is None or mean is None or stdev in (None, 0.0):
+        return 'recent'
+    return 'breach' if rtt >= (mean + (SIGMA_THRESHOLD * stdev)) else 'recent'
+
 def append_latency_sample(history: dict, host: str, status: str, rtt: float | None) -> None:
-    samples = [item for item in history.get(host, []) if isinstance(item, dict)]
-    samples.append({
-        'time': datetime.now().isoformat(timespec='seconds'),
+    samples = normalize_latency_samples(history.get(host, []))
+    usable = [float(item['rtt']) for item in samples if item.get('status') == 'UP' and isinstance(item.get('rtt'), (int, float))]
+    recent = [item for item in samples if item.get('type') == 'recent']
+    baseline = [item for item in samples if item.get('type') == 'baseline']
+    breaches = [item for item in samples if item.get('type') == 'breach']
+    mean = statistics.fmean(usable[-60:]) if len(usable[-60:]) >= MIN_SAMPLES_FOR_STATS else None
+    stdev = statistics.stdev(usable[-60:]) if len(usable[-60:]) >= 2 else None
+    now = datetime.now()
+    sample_type = classify_latency_sample(status, rtt, mean, stdev)
+    sample = {
+        'time': now.isoformat(timespec='seconds'),
         'status': status,
         'rtt': rtt,
-    })
-    history[host] = samples[-LATENCY_SAMPLE_LIMIT:]
+        'type': sample_type,
+    }
+    recent.append(sample)
+    recent = recent[-LATENCY_SAMPLE_LIMIT:]
+    if sample_type == 'breach':
+        breaches.append(sample)
+    last_baseline = parse_time(str(baseline[-1].get('time', ''))) if baseline else None
+    if not last_baseline or (now - last_baseline).total_seconds() >= (LATENCY_BASELINE_INTERVAL_MINUTES * 60):
+        baseline.append({'time': sample['time'], 'status': status, 'rtt': rtt, 'type': 'baseline'})
+    history[host] = recent[-LATENCY_SAMPLE_LIMIT:] + baseline[-LATENCY_BASELINE_LIMIT:] + breaches[-LATENCY_BREACH_LIMIT:]
 
 def latency_stats(history: dict, host: str) -> dict:
     samples = [item for item in history.get(host, []) if isinstance(item, dict)]

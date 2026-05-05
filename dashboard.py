@@ -453,7 +453,7 @@ def latency_summary(samples: list[dict]) -> tuple[str, str, float | None, float 
 def filter_latency_samples(samples: list[dict], range_key: str) -> list[dict]:
     window = RANGE_WINDOWS.get(range_key, RANGE_WINDOWS["day"])
     cutoff = datetime.now() - window
-    filtered = []
+    filtered = {}
     for item in samples:
         if not isinstance(item, dict):
             continue
@@ -463,8 +463,11 @@ def filter_latency_samples(samples: list[dict], range_key: str) -> list[dict]:
         except Exception:
             continue
         if ts >= cutoff:
-            filtered.append(item)
-    return filtered
+            key = (raw, str(item.get("status", "")), item.get("rtt"))
+            current = filtered.get(key)
+            if current is None or str(current.get("type", "")) == "baseline" and str(item.get("type", "")) != "baseline":
+                filtered[key] = item
+    return list(filtered.values())
 
 def render_range_tabs(active_range: str) -> str:
     tabs = []
