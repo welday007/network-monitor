@@ -22,6 +22,7 @@ Dashboard:
 - Matrix: ASCII rain page with mouse disturbance
 - chart ranges: hour, day, week, month, year
 - charts show average, `+2 sigma`, anomaly dots, and over-threshold counts
+- latency history keeps recent detail, sparse baseline points, and breach samples for long-range charts
 
 Run the dashboard from Windows:
 

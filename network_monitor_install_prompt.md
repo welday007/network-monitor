@@ -152,6 +152,7 @@ Required behavior:
 - keep non-critical latency anomalies visible in logs and dashboard
 - compute rolling mean and standard deviation
 - mark anomalies when latency is at or above mean + 2 sigma for 2 consecutive samples
+- keep recent latency detail plus sparse long-term baseline samples and breach samples so week/month/year charts stay useful
 - optionally use OpenRouter for message copy, with deterministic fallback
 - optionally send Jarvis group follow-up when coordination level allows
 
