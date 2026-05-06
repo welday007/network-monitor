@@ -250,42 +250,42 @@ def summarize_context(host: str, event: str, rtt: float | None, probes: dict) ->
     cloudflare = probes.get('1.1.1.1', ('UNKNOWN', None))[0]
     google = probes.get('8.8.8.8', ('UNKNOWN', None))[0]
     if event == 'INTERNET_OUTAGE':
-        return ('Public internet targets are down, but the local router is still reachable.', 'This strongly suggests an upstream Verizon or WAN outage rather than an internal Wi-Fi issue.', 'Check the Verizon gateway internet status and WAN indicators first.')
+        return ('The house still sees the router, but the outside internet is down.', 'That usually points upstream, not to your Dell or Wi-Fi.', 'If this keeps happening, reboot the router once and wait a minute before checking again.')
     if event == 'INTERNET_RECOVERY':
-        return ('Public internet reachability has returned while the router remains healthy.', 'The upstream outage appears to have cleared.', 'No action is needed unless the outage returns.')
+        return ('The outside connection came back while the router stayed healthy.', 'The problem likely cleared on its own.', 'No action is needed right now.')
     if event == 'ROUTER_DOWN':
-        return ('The Dell cannot reach the local router.', 'This usually means a local network issue, router reboot, or cable or Wi-Fi problem.', 'Check whether the Verizon router is powered on and whether the Dell still has a LAN link.')
+        return ('The Dell lost the router.', 'This is usually a local problem, or the router just needs a reboot.', 'Reboot the router first. If that does not help, reboot the Dell.')
     if event == 'ROUTER_RECOVERY':
-        return ('The Dell can reach the local router again.', 'The local gateway path appears to have recovered.', 'No action is needed unless the router drops again soon.')
+        return ('The Dell can reach the router again.', 'The local connection recovered.', 'No action is needed unless it drops again.')
     if event == 'LATENCY_ANOMALY':
-        return (f'Latency to {host} is materially above its normal baseline.', 'This looks like a statistically unusual slowdown rather than ordinary jitter.', 'Watch whether the WAN remains degraded and check the gateway if other services feel slow.')
+        return (f'One connection is running slower than usual: {host}.', 'It looks like a temporary slowdown rather than a full outage.', 'If things feel sluggish, reboot the router. If the problem stays local, reboot the Dell.')
     if event == 'LATENCY_NORMALIZED':
-        return (f'Latency to {host} has returned to its normal range.', 'The earlier abnormal slowdown appears to have cleared.', 'No action is needed unless the anomaly returns.')
+        return (f'The slow connection to {host} has settled back down.', 'The temporary slowdown appears to be over.', 'No action is needed.')
     if event == 'STATE_CHANGE' and host != '192.168.1.1' and router == 'UP' and cloudflare == 'DOWN' and google == 'DOWN':
-        return ('Public internet targets are down, but the local router is still reachable.', 'This usually points to a Verizon or upstream internet issue rather than a home Wi-Fi problem.', 'Check the Verizon gateway internet status and WAN indicators first.')
+        return ('The router is fine, but the outside internet is not responding.', 'That points upstream, not to the Dell.', 'Reboot the router once if this has not cleared after a few minutes.')
     if event == 'STATE_CHANGE' and host == '192.168.1.1' and router == 'DOWN':
-        return ('The Dell cannot reach the local router.', 'This usually means a local network issue, router reboot, or cable or Wi-Fi problem.', 'Check whether the Verizon router is powered on and whether the Dell still has a LAN link.')
+        return ('The Dell cannot reach the router.', 'This is usually a local connection problem.', 'Reboot the router first. If that fails, reboot the Dell.')
     if event == 'HIGH_LATENCY':
-        return (f'Latency to {host} is running high.', 'This can mean congestion, weak upstream connectivity, or a temporary Verizon slowdown.', 'If the router is healthy, watch whether the public targets stay slow for several minutes.')
+        return (f'{host} is running slower than normal.', 'This is likely a temporary slowdown rather than a hard failure.', 'If you need to act, reboot the router first.')
     if event == 'LATENCY_RECOVERY':
-        return (f'Latency to {host} has recovered.', 'The earlier slowdown appears to have cleared.', 'No action is needed unless the spikes keep returning.')
-    return (f'{host} changed state.', 'This is a network state change that may be temporary.', 'Recheck the router and internet targets if it happens again.')
+        return (f'{host} is back to normal.', 'The earlier slowdown appears to have cleared.', 'No action is needed.')
+    return (f'The network changed on {host}.', 'This is probably temporary.', 'If the problem sticks around, reboot the router first and then the Dell.')
 
 def request_kitt_message(api_key: str, model: str, event: str, host: str, rtt: float | None, summary: str, cause: str, check: str) -> str:
-    prompt = ('Write a short Telegram alert as a calm in-car mission computer. Be concise, composed, and protective. Avoid direct imitation of any existing character. Use plain English, under 85 words, no markdown, no emojis. Make it 3 short lines: situation, likely cause, recommended check. Address Kevin once if natural. ' f'Event: {event}. Host: {host}. RTT: {rtt if rtt is not None else "NA"}. ' f'Summary: {summary} Cause: {cause} Check: {check}')
+    prompt = ('Write a short Telegram alert for Kevin in natural English. Be calm, direct, and useful. Avoid technical jargon unless it helps a decision. No markdown, no emojis, under 85 words. Use 3 short lines: what is happening, what it probably means, and what Kevin should do next. When possible, recommend only practical actions: wait and recheck, reboot the router, or reboot the Dell. Address Kevin once if natural. ' f'Event: {event}. Host: {host}. RTT: {rtt if rtt is not None else "NA"}. ' f'Summary: {summary} Cause: {cause} Check: {check}')
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.45}
     req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
     with urllib.request.urlopen(req, timeout=30) as resp: body = json.loads(resp.read().decode('utf-8'))
     return body['choices'][0]['message']['content'].strip()
 
 def fallback_kitt_message(host: str, summary: str, cause: str, check: str) -> str:
-    return '\n'.join([f'KITT: Kevin, I am detecting a network event involving {host}.', f'Assessment: {cause}', f'Recommended check: {check}'])
+    return '\n'.join([f'KITT: Kevin, the connection involving {host} looks off.', f'What it probably means: {cause}', f'What to do: {check}'])
 
 def request_jarvis_followup(api_key: str, model: str, payload: dict) -> str:
     prompt = (
-        'Write one short Telegram follow-up as a polished formal operations assistant with dry wit. '
+        'Write one short Telegram follow-up for Kevin in plain language. Be polished but practical, with a little dry wit if it fits. '
         'Avoid direct imitation of any existing character. Under 75 words. '
-        'Acknowledge KITT has already raised the alert, explain what it means, and suggest the next check. '
+        'Acknowledge KITT already raised the alert, explain what it means in simple terms, and suggest the one or two actions Kevin can actually take. '
         f"Event: {payload.get('event')}. Host: {payload.get('host')}. Status: {payload.get('status')}. RTT: {payload.get('rtt')}. "
         f"Summary: {payload.get('summary')} Cause: {payload.get('cause')} Check: {payload.get('check')}"
     )
@@ -297,9 +297,9 @@ def request_jarvis_followup(api_key: str, model: str, payload: dict) -> str:
 
 def fallback_jarvis_followup(payload: dict) -> str:
     return '\n'.join([
-        'Jarvis operations note.',
-        payload.get('summary', 'A network condition changed.'),
-        f"Recommended check: {payload.get('check', 'Review the router and upstream connectivity.')}",
+        'Jarvis note.',
+        payload.get('summary', 'Something in the network changed.'),
+        f"Best next step: {payload.get('check', 'Reboot the router first, then the Dell if needed.')}",
     ])
 
 def should_send_kitt(event: str) -> bool:

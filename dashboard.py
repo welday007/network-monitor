@@ -411,11 +411,39 @@ def event_severity(line: str) -> str:
     return "normal"
 
 
+def humanize_event_line(line: str) -> str:
+    text = line.strip()
+    replacements = [
+        ("STATE_CHANGE", "connection change"),
+        ("ROUTER_DOWN", "router lost"),
+        ("ROUTER_RECOVERY", "router recovered"),
+        ("INTERNET_OUTAGE", "outside internet outage"),
+        ("INTERNET_RECOVERY", "outside internet recovered"),
+        ("LATENCY_ANOMALY", "slow connection"),
+        ("LATENCY_NORMALIZED", "connection back to normal"),
+        ("HIGH_LATENCY", "slow connection"),
+        ("WIFI_BACKUP_CHECK", "backup Wi-Fi check"),
+        ("WIFI_BACKUP_ALERT_SENT", "backup Wi-Fi alert"),
+        ("FAIL", "problem"),
+    ]
+    for key, replacement in replacements:
+        text = text.replace(key, replacement)
+    text = text.replace("status=DOWN", "status down")
+    text = text.replace("status=UP", "status up")
+    text = text.replace("rtt=", "latency ")
+    text = text.replace("host=", "")
+    text = text.replace("mean=", "baseline ")
+    text = text.replace("stdev=", "variation ")
+    text = text.replace("z_score=", "severity ")
+    text = text.replace("_", " ")
+    return text
+
+
 def render_recent_events(lines: list[str]) -> str:
     items = []
     for line in reversed(lines):
         severity = event_severity(line)
-        items.append(f'<li class="event {severity}">{html.escape(line)}</li>')
+        items.append(f'<li class="event {severity}">{html.escape(humanize_event_line(line))}</li>')
     content = "".join(items) or '<li class="event normal">No recent events</li>'
     return '<ul class="eventlog">' + content + '</ul>'
 
