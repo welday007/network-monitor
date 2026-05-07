@@ -7,6 +7,7 @@ import subprocess
 import statistics
 import urllib.parse
 import urllib.request
+from http_retry import read_json_retry, urlopen_retry
 
 BASE = Path('/home/jarvis/monitor')
 LOG = BASE / 'net-health.log'
@@ -26,6 +27,7 @@ LATENCY_SAMPLE_LIMIT = 240
 LATENCY_BASELINE_INTERVAL_MINUTES = 360
 LATENCY_BASELINE_LIMIT = 120
 LATENCY_BREACH_LIMIT = 240
+WEEKLY_JITTER_DAY = 0
 MIN_SAMPLES_FOR_STATS = 12
 SIGMA_THRESHOLD = 2.0
 CONSECUTIVE_ANOMALIES = 2
@@ -64,8 +66,14 @@ def activity(event: str, **fields) -> None:
 def send_telegram(token: str, chat_id: str, message: str) -> None:
     activity('SEND_ATTEMPT', chat_id=chat_id, chars=len(message))
     payload = urllib.parse.urlencode({'chat_id': chat_id, 'text': message}).encode()
-    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage', data=payload, method='POST')
-    with urllib.request.urlopen(req, timeout=15) as resp: resp.read()
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/sendMessage',
+        data=payload,
+        method='POST',
+        headers={'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+    )
+    with urlopen_retry(req, timeout=15):
+        pass
     activity('SEND_OK', chat_id=chat_id, chars=len(message))
 
 def configured_destinations(*chat_ids: str | None) -> list[str]:
@@ -140,6 +148,7 @@ def load_alert_state() -> dict:
             if isinstance(payload, dict):
                 payload.setdefault('anomaly_counts', {})
                 payload.setdefault('anomaly_active', {})
+                payload.setdefault('weekly_latency_summary', {})
                 payload.setdefault('internet_down_active', False)
                 payload.setdefault('router_down_active', False)
                 return payload
@@ -147,6 +156,7 @@ def load_alert_state() -> dict:
     return {
         'anomaly_counts': {},
         'anomaly_active': {},
+        'weekly_latency_summary': {},
         'internet_down_active': False,
         'router_down_active': False,
     }
@@ -258,7 +268,7 @@ def summarize_context(host: str, event: str, rtt: float | None, probes: dict) ->
     if event == 'ROUTER_RECOVERY':
         return ('The Dell can reach the router again.', 'The local connection recovered.', 'No action is needed unless it drops again.')
     if event == 'LATENCY_ANOMALY':
-        return (f'One connection is running slower than usual: {host}.', 'It looks like a temporary slowdown rather than a full outage.', 'If things feel sluggish, reboot the router. If the problem stays local, reboot the Dell.')
+        return (f'One connection is running slower than usual: {host}.', 'It looks like a temporary slowdown rather than a full outage.', 'No immediate action needed. If it keeps showing up, reboot the router once.')
     if event == 'LATENCY_NORMALIZED':
         return (f'The slow connection to {host} has settled back down.', 'The temporary slowdown appears to be over.', 'No action is needed.')
     if event == 'STATE_CHANGE' and host != '192.168.1.1' and router == 'UP' and cloudflare == 'DOWN' and google == 'DOWN':
@@ -266,7 +276,7 @@ def summarize_context(host: str, event: str, rtt: float | None, probes: dict) ->
     if event == 'STATE_CHANGE' and host == '192.168.1.1' and router == 'DOWN':
         return ('The Dell cannot reach the router.', 'This is usually a local connection problem.', 'Reboot the router first. If that fails, reboot the Dell.')
     if event == 'HIGH_LATENCY':
-        return (f'{host} is running slower than normal.', 'This is likely a temporary slowdown rather than a hard failure.', 'If you need to act, reboot the router first.')
+        return (f'{host} is running slower than normal.', 'This is likely a temporary slowdown rather than a hard failure.', 'No immediate action needed. Reboot the router only if it starts affecting everything.')
     if event == 'LATENCY_RECOVERY':
         return (f'{host} is back to normal.', 'The earlier slowdown appears to have cleared.', 'No action is needed.')
     return (f'The network changed on {host}.', 'This is probably temporary.', 'If the problem sticks around, reboot the router first and then the Dell.')
@@ -275,7 +285,7 @@ def request_kitt_message(api_key: str, model: str, event: str, host: str, rtt: f
     prompt = ('Write a short Telegram alert for Kevin in natural English. Be calm, direct, and useful. Avoid technical jargon unless it helps a decision. No markdown, no emojis, under 85 words. Use 3 short lines: what is happening, what it probably means, and what Kevin should do next. When possible, recommend only practical actions: wait and recheck, reboot the router, or reboot the Dell. Address Kevin once if natural. ' f'Event: {event}. Host: {host}. RTT: {rtt if rtt is not None else "NA"}. ' f'Summary: {summary} Cause: {cause} Check: {check}')
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.45}
     req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
-    with urllib.request.urlopen(req, timeout=30) as resp: body = json.loads(resp.read().decode('utf-8'))
+    body = read_json_retry(req, timeout=30)
     return body['choices'][0]['message']['content'].strip()
 
 def fallback_kitt_message(host: str, summary: str, cause: str, check: str) -> str:
@@ -291,8 +301,7 @@ def request_jarvis_followup(api_key: str, model: str, payload: dict) -> str:
     )
     body = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.35}
     req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(body).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        response = json.loads(resp.read().decode('utf-8'))
+    response = read_json_retry(req, timeout=30)
     return response['choices'][0]['message']['content'].strip()
 
 def fallback_jarvis_followup(payload: dict) -> str:
@@ -301,6 +310,85 @@ def fallback_jarvis_followup(payload: dict) -> str:
         payload.get('summary', 'Something in the network changed.'),
         f"Best next step: {payload.get('check', 'Reboot the router first, then the Dell if needed.')}",
     ])
+
+def latency_week_window_samples(samples: list[dict], end: datetime, days: int) -> list[dict]:
+    start = end - timedelta(days=days)
+    scoped = []
+    for item in samples:
+        if not isinstance(item, dict):
+            continue
+        ts = parse_time(str(item.get('time', '')))
+        if ts and start <= ts < end:
+            scoped.append(item)
+    return scoped
+
+def summarize_latency_week(history: dict) -> str | None:
+    now = datetime.now()
+    if now.weekday() != WEEKLY_JITTER_DAY:
+        return None
+    week_key = now.strftime('%Y-%m-%d')
+    last_sent = state.get('weekly_latency_summary', {}).get('sent_for_week')
+    if last_sent == week_key:
+        return None
+    hosts = [host for host in TARGETS if host != '192.168.1.1']
+    pieces = []
+    week_quality = []
+    for host in hosts:
+        samples = normalize_latency_samples(history.get(host, []))
+        current_week = latency_week_window_samples(samples, now, 7)
+        previous_week = latency_week_window_samples(samples, now - timedelta(days=7), 7)
+        current_values = [float(item['rtt']) for item in current_week if item.get('status') == 'UP' and isinstance(item.get('rtt'), (int, float))]
+        previous_values = [float(item['rtt']) for item in previous_week if item.get('status') == 'UP' and isinstance(item.get('rtt'), (int, float))]
+        current_avg = statistics.fmean(current_values) if current_values else None
+        previous_avg = statistics.fmean(previous_values) if previous_values else None
+        current_breaches = sum(1 for item in current_week if item.get('type') == 'breach' or item.get('status') != 'UP')
+        previous_breaches = sum(1 for item in previous_week if item.get('type') == 'breach' or item.get('status') != 'UP')
+        if current_avg is None and previous_avg is None:
+            continue
+        if current_avg is None:
+            trend = 'worse'
+        elif previous_avg is None:
+            trend = 'no comparison'
+        else:
+            delta = current_avg - previous_avg
+            if abs(delta) < 1.0:
+                trend = 'about the same'
+            elif delta < 0:
+                trend = 'better'
+            else:
+                trend = 'worse'
+        better_or_worse = 'better' if trend == 'better' else 'worse' if trend == 'worse' else 'about the same'
+        pieces.append(f'{host}: {better_or_worse} than last week')
+        week_quality.append((host, current_avg, previous_avg, current_breaches, previous_breaches, trend))
+    if not pieces:
+        return None
+    overall = []
+    better_count = sum(1 for _, _, _, _, _, trend in week_quality if trend == 'better')
+    worse_count = sum(1 for _, _, _, _, _, trend in week_quality if trend == 'worse')
+    same_count = sum(1 for _, _, _, _, _, trend in week_quality if trend == 'about the same')
+    if better_count > worse_count:
+        overall.append('Overall: slightly better than last week.')
+    elif worse_count > better_count:
+        overall.append('Overall: slightly worse than last week.')
+    else:
+        overall.append('Overall: about the same as last week.')
+    if better_count or worse_count or same_count:
+        overall.append(f'Trend: {better_count} better, {worse_count} worse, {same_count} about the same.')
+    details = []
+    for host, current_avg, previous_avg, current_breaches, previous_breaches, trend in week_quality:
+        if current_avg is None or previous_avg is None:
+            continue
+        delta = current_avg - previous_avg
+        direction = 'improved' if delta < 0 else 'got worse' if delta > 0 else 'stayed flat'
+        details.append(f'{host}: {direction} by {abs(delta):.1f} ms, breaches {current_breaches} vs {previous_breaches}.')
+    text = '\n'.join([
+        'Weekly connection summary for Kevin.',
+        *overall,
+        *details,
+        'Practical read: if the whole house feels off, reboot the router. If only the Dell feels off, reboot the Dell.',
+    ])
+    state['weekly_latency_summary']['sent_for_week'] = week_key
+    return text
 
 def should_send_kitt(event: str) -> bool:
     return event in KITT_SEVERE_EVENTS
@@ -407,27 +495,20 @@ for host, (status, rtt) in probes.items():
             count += 1
             anomaly_counts[host] = count
             if count >= CONSECUTIVE_ANOMALIES and not active:
-                summary, cause, check = summarize_context(host, 'LATENCY_ANOMALY', rtt, probes)
-                payload = {'time': datetime.now().isoformat(timespec='seconds'), 'event': 'LATENCY_ANOMALY', 'host': host, 'status': status, 'rtt': rtt, 'summary': summary, 'cause': cause, 'check': check, 'mean': stats['mean'], 'stdev': stats['stdev'], 'z_score': z_score, 'probes': {k: {'status': v[0], 'rtt': v[1]} for k, v in probes.items()}}
-                write_latest_alert(payload)
-                remember_event('monitor', payload)
-                log(f'LATENCY_ANOMALY host={host} rtt={rtt}ms mean={stats["mean"]:.1f} stdev={stats["stdev"]:.1f} z={z_score:.2f}')
-                activity('LATENCY_ANOMALY', host=host, rtt=rtt, mean=stats['mean'], stdev=stats['stdev'], z_score=z_score)
                 anomaly_active[host] = True
-                maybe_send_jarvis_group_followup(jarvis_token, jarvis_group_chat_id, api_key, model, payload, coordination_level, coordination_state)
         else:
             anomaly_counts[host] = 0
-            if active:
-                summary, cause, check = summarize_context(host, 'LATENCY_NORMALIZED', rtt, probes)
-                payload = {'time': datetime.now().isoformat(timespec='seconds'), 'event': 'LATENCY_NORMALIZED', 'host': host, 'status': status, 'rtt': rtt, 'summary': summary, 'cause': cause, 'check': check, 'mean': stats['mean'], 'stdev': stats['stdev'], 'z_score': z_score, 'probes': {k: {'status': v[0], 'rtt': v[1]} for k, v in probes.items()}}
-                write_latest_alert(payload)
-                remember_event('monitor', payload)
-                log(f'LATENCY_NORMALIZED host={host} rtt={rtt}ms mean={stats["mean"]:.1f} stdev={stats["stdev"]:.1f} z={z_score:.2f}')
-                activity('LATENCY_NORMALIZED', host=host, rtt=rtt, mean=stats['mean'], stdev=stats['stdev'], z_score=z_score)
             anomaly_active[host] = False
     else:
         anomaly_counts[host] = 0
 save_latency_history(latency_history)
+weekly_summary = summarize_latency_week(latency_history)
+if weekly_summary and token and private_chat_id:
+    send_telegram(token, private_chat_id, weekly_summary)
+    payload = {'time': datetime.now().isoformat(timespec='seconds'), 'event': 'WEEKLY_LATENCY_SUMMARY', 'host': 'latency', 'status': 'INFO', 'summary': weekly_summary, 'cause': 'Weekly comparison of latency history.', 'check': 'No action needed unless the trend keeps getting worse.', 'probes': {k: {'status': v[0], 'rtt': v[1]} for k, v in probes.items()}}
+    write_latest_alert(payload)
+    remember_event('monitor', payload)
+    activity('WEEKLY_LATENCY_SUMMARY', summary=weekly_summary)
 save_alert_state(state)
 save_coordination_state(coordination_state)
 activity('RUN_COMPLETE')

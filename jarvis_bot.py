@@ -10,6 +10,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
+from http_retry import read_json_retry, read_text_retry
 
 BASE = Path('/home/jarvis/monitor')
 TELEGRAM_ENV = BASE / 'telegram.env'
@@ -94,8 +95,13 @@ def record_chat(direction: str, chat_id: str, chat_type: str, text: str) -> None
 
 def telegram_api(token: str, method: str, data: dict | None = None, request_timeout: int = 20) -> dict:
     encoded = urllib.parse.urlencode(data or {}).encode() if data is not None else None
-    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/{method}', data=encoded, method='POST' if data is not None else 'GET')
-    with urllib.request.urlopen(req, timeout=request_timeout) as resp: return json.loads(resp.read().decode('utf-8'))
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/{method}',
+        data=encoded,
+        method='POST' if data is not None else 'GET',
+        headers={'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+    )
+    return read_json_retry(req, timeout=request_timeout)
 
 def send_message(token: str, chat_id: str, text: str) -> None:
     activity('SEND_ATTEMPT', chat_id=chat_id, chars=len(text))
@@ -233,7 +239,7 @@ def status_text() -> str:
 
 def fetch_cisa_news(limit: int = 3) -> list[dict]:
     req = urllib.request.Request(CISA_URL, headers={'User-Agent': 'Mozilla/5.0'})
-    html = urllib.request.urlopen(req, timeout=25).read().decode('utf-8', errors='ignore')
+    html = read_text_retry(req, timeout=25, errors='ignore')
     pattern = re.compile(r'href="(?P<href>/news-events/[^\"]+)"[^>]*>(?P<title>[^<]+)</a>', re.IGNORECASE)
     seen = set(); items = []
     for match in pattern.finditer(html):
@@ -261,9 +267,14 @@ def joke_text() -> str:
     if not api_key: return 'Jarvis joke\n\nSecurity remains the only field where paranoia occasionally counts as preparation.'
     prompt = 'Write one short clean cybersecurity joke in the voice of a polished formal assistant with dry wit. Under 25 words.'
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.8}
-    req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+        method='POST',
+    )
     try:
-        with urllib.request.urlopen(req, timeout=25) as resp: body = json.loads(resp.read().decode('utf-8'))
+        body = read_json_retry(req, timeout=25)
         joke = body['choices'][0]['message']['content'].strip()
     except Exception:
         joke = 'I should note that the safest password is still the one you do not reuse.'
@@ -311,14 +322,18 @@ def request_natural_reply(user_text: str, chat_type: str) -> str:
         "Reply in plain text. Usually 1-4 short paragraphs or a short list. No markdown unless clearly helpful."
     )
     payload = {'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user_prompt}], 'temperature': 0.7}
-    req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+        method='POST',
+    )
     try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            body = json.loads(resp.read().decode('utf-8'))
+        body = read_json_retry(req, timeout=35)
         return body['choices'][0]['message']['content'].strip()
     except Exception as exc:
         activity('LLM_ERROR', reason=type(exc).__name__, detail=str(exc))
-        return "I ran into a network issue reaching the language model. Try again in a moment, or use /status for a direct check."
+    return "I ran into a network issue reaching the language model. Try again in a moment, or use /status for a direct check."
 
 def file_text(path: Path, title: str) -> str:
     if not path.exists(): return f'{title}\n\nNot configured.'

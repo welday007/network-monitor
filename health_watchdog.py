@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import urllib.parse
 import urllib.request
+from http_retry import urlopen_retry
 
 BASE = Path('/home/jarvis/monitor')
 TELEGRAM_ENV = BASE / 'telegram.env'
@@ -39,9 +40,14 @@ def activity(event: str, **fields) -> None:
 
 def send_telegram(token: str, chat_id: str, text: str) -> None:
     payload = urllib.parse.urlencode({'chat_id': chat_id, 'text': text, 'disable_web_page_preview': 'true'}).encode()
-    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage', data=payload, method='POST')
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        resp.read()
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/sendMessage',
+        data=payload,
+        method='POST',
+        headers={'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+    )
+    with urlopen_retry(req, timeout=20):
+        pass
 
 
 def load_state() -> dict:
@@ -99,8 +105,9 @@ def has_today_log(marker: str) -> bool:
 
 
 def telegram_health() -> tuple[bool, str]:
+    req = urllib.request.Request('https://api.telegram.org', headers={'User-Agent': 'Mozilla/5.0', 'Connection': 'close'})
     try:
-        with urllib.request.urlopen('https://api.telegram.org', timeout=10) as resp:
+        with urlopen_retry(req, timeout=10) as resp:
             return True, str(resp.status)
     except Exception as exc:
         return False, f'{type(exc).__name__}: {exc}'

@@ -8,6 +8,7 @@ import re
 import subprocess
 import urllib.parse
 import urllib.request
+from http_retry import read_json_retry, urlopen_retry
 
 BASE = Path('/home/jarvis/monitor'); TELEGRAM_ENV = BASE / 'telegram.env'; LLM_ENV = BASE / 'llm.env'; SEARCH_ENV = BASE / 'search.env'; LOG = BASE / 'net-health.log'; TARGETS = ['192.168.1.1', '1.1.1.1', '8.8.8.8']; DEFAULT_MODEL = 'openrouter/free'
 ACTIVITY_LOG = BASE / 'activity.log'
@@ -30,8 +31,14 @@ def activity(event: str, **fields) -> None:
 def send_telegram(token: str, chat_id: str, message: str) -> None:
     activity('SEND_ATTEMPT', chat_id=chat_id, chars=len(message))
     payload = urllib.parse.urlencode({'chat_id': chat_id, 'text': message, 'parse_mode': 'HTML', 'disable_web_page_preview': 'true'}).encode()
-    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage', data=payload, method='POST')
-    with urllib.request.urlopen(req, timeout=20) as resp: resp.read()
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/sendMessage',
+        data=payload,
+        method='POST',
+        headers={'User-Agent': 'Mozilla/5.0', 'Connection': 'close'},
+    )
+    with urlopen_retry(req, timeout=20):
+        pass
     activity('SEND_OK', chat_id=chat_id, chars=len(message))
 
 def probe(host: str) -> tuple[str, str]:
@@ -60,7 +67,7 @@ def format_bytes(value: int) -> str:
 def fetch_ai_headline(api_key: str):
     params = urllib.parse.urlencode({'engine': 'google_news', 'q': 'AI OR "artificial intelligence" OpenAI Google Microsoft Anthropic Nvidia', 'gl': 'us', 'hl': 'en', 'api_key': api_key, 'no_cache': 'true'})
     req = urllib.request.Request(f'https://serpapi.com/search.json?{params}')
-    with urllib.request.urlopen(req, timeout=30) as resp: payload = json.loads(resp.read().decode('utf-8'))
+    payload = read_json_retry(req, timeout=30)
     for item in payload.get('news_results', []):
         title = (item.get('title') or '').strip()
         if title: return {'title': unescape(title), 'source': item.get('source', {}).get('name', 'unknown source'), 'url': item.get('link', '')}
@@ -76,7 +83,7 @@ def request_dialog(api_key: str, model: str, headline: dict) -> str:
     )
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.55}
     req = urllib.request.Request('https://openrouter.ai/api/v1/chat/completions', data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST')
-    with urllib.request.urlopen(req, timeout=35) as resp: body = json.loads(resp.read().decode('utf-8'))
+    body = read_json_retry(req, timeout=35)
     return clean_dialog(body['choices'][0]['message']['content'].strip())
 
 def clean_dialog(text: str) -> str:
